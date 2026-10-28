@@ -1,0 +1,46 @@
+# ============================================================================
+# ESP32 serial mapping — ACTIVE VARIANT: classic ESP32 DevKitC (CP2102/CH340),
+# mapped BY PHYSICAL USB PORT. Works with any board pair plugged into the two
+# designated sockets; swapping pairs needs no config change.
+#
+# ONE-TIME SETUP PER PI (the placeholders below MUST be filled in):
+#   1. Plug the drive ESP into its designated socket, run:
+#        udevadm info -q property -n /dev/ttyUSB0 | grep ID_PATH=
+#      (or: ls -l /dev/serial/by-path/)
+#   2. Replace TODO_DRIVE_PORT below with the USB PORT TOKEN of that path —
+#      the "usb-0:X.Y:1.0" piece. Example: ID_PATH is
+#      "platform-xhci-hcd.1-usb-0:1.2:1.0" -> the rule value becomes
+#      ENV{ID_PATH}=="*usb-0:1.2:1.0*"
+#   3. Repeat for the sensors ESP in its socket.
+#   4. sudo cp config/99-robot-hardware.rules /etc/udev/rules.d/
+#      sudo udevadm control --reload-rules && sudo udevadm trigger
+#      (replug the ESPs or reboot)
+#   5. Verify: ls -l /dev/esp_drive /dev/esp_sensors
+#
+# The names are BY FUNCTION (drive = VESC/servo board, sensors = ultrasonic/
+# actuator/CYD-passthrough board) — the compose agents depend on them.
+# The unfilled TODO lines are harmless (match-only rules that never match);
+# until filled, the symlinks simply don't appear.
+# ============================================================================
+
+# Drive ESP32 (VESCs, servos) — designated physical socket:
+SUBSYSTEM=="tty", ENV{ID_PATH}=="*TODO_DRIVE_PORT*", SYMLINK+="esp_drive"
+
+# Sensors ESP32 (ultrasonics, actuators, CYD UART passthrough) — designated socket:
+SUBSYSTEM=="tty", ENV{ID_PATH}=="*TODO_SENSORS_PORT*", SYMLINK+="esp_sensors"
+
+# ============================================================================
+# ALTERNATE VARIANT (unused while on classic DevKitC): ESP32-S3 with
+# USB.productName() set in firmware. Then Linux auto-creates
+# /dev/serial/by-id/usb-Espressif_ESP32_Drive-if00 etc. on ANY Pi and ANY
+# port, these rules become unnecessary, and the compose device lines switch
+# to the by-id paths (see docker-compose.yaml comments).
+# HARDWARE DECISION PENDING — see repo README.
+# ============================================================================
+
+# ============================================================================
+# Camera / lidar: NO rules needed — both carry factory serials and appear
+# under /dev/v4l/by-id/ and /dev/serial/by-id/ automatically. The ros2_app
+# container mounts /dev wholesale, so their drivers reference by-id paths
+# directly in launch config.
+# ============================================================================

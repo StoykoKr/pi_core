@@ -1,0 +1,162 @@
+# ============================================================================
+# Re4Life robot brain — Pi 5 production stack (compose-first per contract §1)
+# ----------------------------------------------------------------------------
+# PROFILES: hardware-dependent services only start when their profile is on,
+# so the core stack comes up even with no ESPs/camera/lidar plugged in yet.
+# Set active profiles in ./.env  ->  COMPOSE_PROFILES=drive,sensors,camera
+# (empty value = core services only: broker, signing, provisioning, ros2 app)
+#
+# Mapping a device that doesn't exist kills a container at start — that is WHY
+# the agents sit behind profiles, and why the ros2 app uses privileged + /dev
+# volume instead of per-device mappings.
+# ============================================================================
+
+services:
+  # ==========================================================================
+  # MQTT broker — mTLS :8883 (app <-> robot). Certs from scripts/init-ca.sh.
+  # ==========================================================================
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mqtt_broker
+    restart: unless-stopped
+    network_mode: host            # 8883 on the host/AP interface directly
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - /robot_data/certs:/robot_data/certs:ro
+
+  # ==========================================================================
+  # micro-ROS agents — named BY FUNCTION (contract), not left/right.
+  #
+  # DEFAULT (active) VARIANT: classic ESP32 DevKitC -> udev physical-port
+  # symlinks /dev/esp_drive, /dev/esp_sensors (config/99-robot-hardware.rules).
+  #
+  # ALTERNATE VARIANT (commented): ESP32-S3 with firmware-set USB product
+  # names -> automatic /dev/serial/by-id/ paths, no udev rules needed.
+  # HARDWARE DECISION PENDING — swap the device lines if S3s are adopted.
+  # ==========================================================================
+  agent_drive:
+    image: microros/micro-ros-agent:jazzy
+    container_name: micro_ros_agent_drive
+    profiles: ["drive"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=0
+    devices:
+      - "/dev/esp_drive:/dev/esp_drive"
+      # S3 variant:
+      # - "/dev/serial/by-id/usb-Espressif_ESP32_Drive-if00:/dev/esp_drive"
+    command: serial --dev /dev/esp_drive -b 115200
+
+  agent_sensors:
+    image: microros/micro-ros-agent:jazzy
+    container_name: micro_ros_agent_sensors
+    profiles: ["sensors"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=0
+    devices:
+      - "/dev/esp_sensors:/dev/esp_sensors"
+      # S3 variant:
+      # - "/dev/serial/by-id/usb-Espressif_ESP32_Sensors-if00:/dev/esp_sensors"
+    command: serial --dev /dev/esp_sensors -b 115200
+
+  # ==========================================================================
+  # Main ROS2 app — Nav2, slam_toolbox, spatial_projector, camera_memory,
+  # base_controller, twist_mux, mqtt_bridge (as they land in src/).
+  # privileged + /dev volume: sees hailo/camera/lidar nodes WITHOUT dying
+  # when one is absent. No security isolation intended (contract §1).
+  # ==========================================================================
+  ros2_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: re4life/ros2_app:latest
+    container_name: ros2_robot_app
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    privileged: true
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///robot_ws/src/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+    volumes:
+      - ../src:/robot_ws/src
+      - /robot_data:/robot_data
+      - /dev:/dev
+    # Placeholder until the bringup launch is committed to src/ — then:
+    # command: bash -c "source /opt/ros/jazzy/setup.bash && cd /robot_ws && colcon build --symlink-install && source install/setup.bash && ros2 launch robot_bringup robot.launch.py"
+    command: sleep infinity
+
+  # ==========================================================================
+  # Signing server — server.py UNCHANGED (trusted crypto code), container is
+  # only a launcher. rw cert mount: it writes tokens.json + clients/.
+  # ==========================================================================
+  signing:
+    build:
+      context: ../services/signing
+    image: re4life/signing:latest
+    container_name: signing_server
+    restart: unless-stopped
+    network_mode: host            # :8443 on the AP interface
+    environment:
+      - RE4LIFE_CERT_DIR=/robot_data/certs
+    volumes:
+      - /robot_data/certs:/robot_data/certs:rw
+
+  # ==========================================================================
+  # Provisioning — tiny rclpy wrapper (the only new provisioning code):
+  # /ui/request_qr -> subprocess qr_generator.py -> /ui/qr_payload.
+  # Failures: nothing on qr_payload, loud log, /ui/provisioning_status.
+  # Reuses the ros2_app image (needs rclpy; pips already included there).
+  # host-net => sees wlan0, so the generator's IP autodetect works unmodified.
+  # ==========================================================================
+  provisioning:
+    image: re4life/ros2_app:latest
+    container_name: provisioning
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - ros2_app                  # image reuse: ensure it is built
+      - signing
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///robot_ws/src/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+      - RE4LIFE_CERT_DIR=/robot_data/certs
+      - RE4LIFE_HOSTAPD=/config/ap_credentials.conf
+      - RE4LIFE_AP_IFACE=wlan0
+      # Embedded in the QR for the app's camera stream login. web_video_server
+      # is currently unauthenticated, so these are informational placeholders —
+      # set real values here if stream auth is ever added.
+      - RE4LIFE_CAMERA_USER=robot
+      - RE4LIFE_CAMERA_PASS=stream-not-secret
+    volumes:
+      - ../src:/robot_ws/src:ro
+      - ../services/provisioning:/provisioning:ro
+      - ../config/ap_credentials.conf:/config/ap_credentials.conf:ro
+      - /robot_data/certs:/robot_data/certs:ro
+    command: bash -c "source /opt/ros/jazzy/setup.bash && python3 /provisioning/provisioning_node.py"
+
+  # ==========================================================================
+  # web_video_server — HTTP :8080; serves ROS image topics to the CYD screen
+  # and the mobile app (video never goes over MQTT). Only useful with a
+  # camera publishing, hence the profile.
+  # ==========================================================================
+  web_video_server:
+    image: re4life/ros2_app:latest
+    container_name: web_video_server
+    profiles: ["camera"]
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - ros2_app
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///robot_ws/src/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+    volumes:
+      - ../src:/robot_ws/src:ro
+    command: bash -c "source /opt/ros/jazzy/setup.bash && ros2 run web_video_server web_video_server"

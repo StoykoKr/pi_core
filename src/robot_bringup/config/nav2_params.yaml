@@ -1,0 +1,339 @@
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: "map"
+    robot_base_frame: "base_link"
+    odom_topic: "odom"
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    action_server_result_timeout: 900.0
+    navigators: [navigate_to_pose, navigate_through_poses]
+    default_nav_to_pose_bt_xml: "/robot_ws/src/robot_bringup/config/nav_to_pose_persistent_memory.xml"
+    navigate_to_pose:
+      plugin: nav2_bt_navigator::NavigateToPoseNavigator
+    navigate_through_poses:
+      plugin: nav2_bt_navigator::NavigateThroughPosesNavigator
+
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.0
+    min_theta_velocity_threshold: 0.001
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.15
+      movement_time_allowance: 15.0
+
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.20
+      yaw_goal_tolerance: 0.25
+      stateful: true
+
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: true
+      min_vel_x: 0.0
+      min_vel_y: 0.0
+      max_vel_x: 0.52       # 2x speed request; velocity_smoother must match
+      max_vel_y: 0.0
+      max_vel_theta: 1.0
+      min_speed_xy: 0.0
+      max_speed_xy: 0.52
+      min_speed_theta: 0.0
+      acc_lim_x: 2.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -3.2
+      vx_samples: 20
+      vy_samples: 1
+      vtheta_samples: 20
+      sim_time: 1.7
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      trans_stopped_velocity: 0.02
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 2.0
+      PathAlign.scale: 32.0
+      GoalAlign.scale: 24.0
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 10.0
+      publish_frequency: 10.0
+      global_frame: "odom"
+      robot_base_frame: "base_link"
+      use_sim_time: true
+      rolling_window: true
+      width: 8                      
+      height: 8                     
+      resolution: 0.05
+      robot_radius: 0.50
+      plugins: ["obstacle_layer","camera_layer", "inflation_layer"]
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 6.0
+        inflation_radius: 0.75
+
+      # DIRECT POINTCLOUD OBSERVATION STRATEGY
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan_floor
+        scan_floor:
+          topic: /scan
+          max_obstacle_height: 0.3
+          min_obstacle_height: 0.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 5.0
+          obstacle_max_range: 4.0
+      camera_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        footprint_clearing_enabled: true
+        # camera_live REMOVED from marking: raw single-frame mono-depth
+        # clouds bypass every confirmation check in camera_memory, so one
+        # glitchy frame marked lethal cells with no way to clear them.
+        # Confirmed memory is the only camera marking source now.
+        # camera_clear ADDED: it was defined before but never listed here,
+        # which is why clearing appeared to do nothing at all.
+        observation_sources: camera_memory camera_clear
+        camera_memory:
+          topic: /camera/obstacle_memory
+          max_obstacle_height: 2.0
+          min_obstacle_height: 0.0
+          clearing: false
+          marking: true
+          data_type: "PointCloud2"
+          obstacle_max_range: 200.0
+          expected_update_rate: 0.0
+        camera_clear:
+          topic: /camera/clearing_cloud
+          marking: false
+          clearing: true
+          # Safe by construction (spatial_projector): rays stop short of
+          # believed surfaces, unknown pixels emit NO ray, and the cloud is
+          # restricted to the trusted image crop. So this can no longer
+          # raytrace through a real obstacle it failed to see.
+          raytrace_max_range: 5.5
+          min_obstacle_height: -1.0 # negative so floor endpoints are accepted for raytracing
+          max_obstacle_height: 3.0
+          data_type: "PointCloud2"
+
+
+
+      always_send_full_costmap: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: "map"
+      robot_base_frame: "base_link"
+      use_sim_time: true
+      robot_radius: 0.50
+      resolution: 0.05
+      track_unknown_space: true
+      # use_maximum is a COSTMAP-LEVEL param shared by all StaticLayers in
+      # this costmap. true = layers combine by max instead of overwriting,
+      # so the memory layer's free cells can never erase SLAM walls and
+      # vice versa. (The master grid is recombined from all layers every
+      # update cycle, which is what makes memory REMOVALS take effect.)
+      use_maximum: true
+      plugins: ["static_layer", "camera_memory_layer", "obstacle_layer", "inflation_layer"]
+
+      # Mirror of camera_memory's confirmed voxels. A StaticLayer REPLACES
+      # its content on each /camera/memory_grid message, so when the memory
+      # node deletes a phantom voxel (FOV misses, decay, /clear service) the
+      # lethal cells actually disappear here on the next 2 Hz publish. The
+      # old ObstacleLayer approach could only ever ADD cost: every false
+      # positive was permanent by design.
+      camera_memory_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: "/camera/memory_grid"
+        map_subscribe_transient_local: true
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan_floor
+        
+        scan_floor:
+          topic: /scan
+          max_obstacle_height: 0.3
+          min_obstacle_height: 0.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan" 
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+
+        cost_scaling_factor: 6.0
+        inflation_radius: 0.75
+
+      always_send_full_costmap: true
+
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 20.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+behavior_server:
+  ros__parameters:
+    costmap_topic: "local_costmap/costmap_raw"
+    footprint_topic: "local_costmap/published_footprint"
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    global_frame: "odom"
+    robot_base_frame: "base_link"
+    transform_tolerance: 0.1
+    use_sim_time: true
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+waypoint_follower:
+  ros__parameters:
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: true
+      waypoint_pause_duration: 200
+
+lifecycle_manager_navigation:
+  ros__parameters:
+    use_sim_time: true
+    autostart: true
+    bond_timeout: 4.0 
+    attempt_asynchronous_transitions: true
+    node_names:
+      [
+        #"slam_toolbox",
+        "controller_server",
+        "smoother_server",
+        "planner_server",
+        "behavior_server",
+        "bt_navigator",
+        "waypoint_follower",
+        "velocity_smoother"
+      ]
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: true
+    smoothing_frequency: 5.0
+    scale_velocities: false
+    feedback: OPEN_LOOP
+    # Must be >= DWB max_vel_x, otherwise the smoother silently caps the
+    # speed and the DWB change does nothing.
+    max_velocity: [0.52, 0.0, 1.5]
+    min_velocity: [-0.52, 0.0, -1.5]
+    max_accel: [1.0, 0.0, 3.2]
+    max_decel: [-1.0, 0.0, -3.2]
+    odom_duration: 0.1
+    deadband_velocity: [0.01, 0.01, 0.1]
+    velocity_timeout: 1.0
+
+smoother_server:
+  ros__parameters:
+    costmap_topic: "global_costmap/costmap_raw"
+    footprint_topic: "global_costmap/published_footprint"
+    robot_base_frame: "base_link"
+    transform_timeout: 0.1
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      do_refinement: true
+
+collision_monitor:
+  ros__parameters:
+    use_sim_time: True
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    transform_tolerance: 0.5
+    source_timeout: 5.0
+    stop_pub_timeout: 2.0
+    enable_stamped_cmd_vel: False
+    
+    polygons: ["PolygonStop"]
+    PolygonStop:
+      type: "polygon"
+      # Sized for the SIM robot. Update to the real footprint + margin later.
+      points: "[[0.4, 0.3], [0.4, -0.3], [-0.4, -0.3], [-0.4, 0.3]]"
+      action_type: "stop"
+      min_points: 4
+      visualize: True
+      polygon_pub_topic: "polygon_stop"
+
+          # LIDAR ONLY. The camera cloud was removed deliberately: mono depth
+    # noise inside the stop polygon with min_points 2 causes constant
+    # false emergency stops, and stop decisions must come from sensors
+    # that measure distance, not estimate it. On the real robot this is
+    # where the ultrasonics get added as additional "range" sources.
+
+    observation_sources: ["scan_floor"]
+    scan_floor:
+      type: "scan"
+      topic: "/scan"
+   # camera_airspace:
+   #   type: "pointcloud"               
+   #   topic: "/camera/obstacle_cloud"  
+   #   min_points: 2                    
+
+docking_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 50.0
+    dock_plugins: ["simple_dock"]
+    simple_dock:
+      plugin: "opennav_docking::SimpleChargingDock"
+      docking_threshold: 0.05
+      staging_timeout: 300.0
+      docking_timeout: 300.0

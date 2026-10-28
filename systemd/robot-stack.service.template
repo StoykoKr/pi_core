@@ -1,0 +1,21 @@
+# Installed by install.sh (with __REPO_DIR__ substituted) as
+# /etc/systemd/system/robot-stack.service — brings the compose stack up on
+# every boot, after Docker and the network are ready.
+[Unit]
+Description=Re4Life robot container stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=__REPO_DIR__/docker
+ExecStart=/usr/bin/docker compose up -d
+# --profile "*" on stop: otherwise containers from profiles that were since
+# removed from .env get orphaned and keep holding the serial ports.
+ExecStop=/usr/bin/docker compose --profile "*" down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

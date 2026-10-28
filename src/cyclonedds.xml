@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+    <Domain id="any">
+        <General>
+            <AllowMulticast>true</AllowMulticast>
+        </General>
+        <!-- Two-machine HIL testing (laptop sim over ethernet): multicast
+             discovery can be flaky across links — if topics are visible but
+             silent, add explicit unicast peers like so:
+        <Discovery>
+            <Peers>
+                <Peer address="192.168.1.10"/>   laptop
+                <Peer address="192.168.1.20"/>   this Pi
+            </Peers>
+        </Discovery>
+        -->
+    </Domain>
+</CycloneDDS>

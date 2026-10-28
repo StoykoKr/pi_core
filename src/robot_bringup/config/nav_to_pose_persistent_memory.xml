@@ -1,0 +1,53 @@
+<!--
+  NavigateToPose BT with PERSISTENT GLOBAL MEMORY.
+
+  Difference from the stock navigate_to_pose_w_replanning_and_recovery.xml:
+  every ClearEntireCostmap acting on the GLOBAL costmap has been removed
+  (there were two: the ComputePathToPose contextual recovery and the
+  ClearingActions recovery sequence). Those were the reason camera-marked
+  overhangs kept vanishing: robot halts at the overhang -> path in
+  collision -> recovery fires -> global costmap wiped -> planner happily
+  replans straight through the blocked corridor -> loop.
+
+  Local costmap clearing is kept: it is a rolling window with live sensor
+  refill, so clearing it is cheap and safe. The global camera_layer
+  (marking-only) is now the robot's long-term memory of lidar-invisible
+  obstacles, protected by the residual gate in spatial_projector.py.
+
+  Long-term memory now lives in the camera_memory node (map-frame,
+  survives costmap resizes/clears). If a phantom mark ever slips through
+  the residual gate and blocks the ONLY route, clear the memory itself;
+  clearing only the costmap is no longer enough, since the memory node
+  would immediately re-mark it:
+    ros2 service call /camera_memory/clear std_srvs/srv/Empty
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context"
+                                service_name="local_costmap/clear_entirely_local_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-FollowPath"
+                              service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <ClearEntireCostmap name="ClearLocalCostmap-Recovery"
+                              service_name="local_costmap/clear_entirely_local_costmap"/>
+          <Spin spin_dist="1.57"/>
+          <Wait wait_duration="5.0"/>
+          <BackUp backup_dist="0.30" backup_speed="0.05"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

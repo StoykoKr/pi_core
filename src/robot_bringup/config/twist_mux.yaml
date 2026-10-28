@@ -1,0 +1,29 @@
+# twist_mux — command arbitration (contract v4 §3; Phase A Stage 3).
+# Chain: /cmd_vel_smoothed (nav) + /cmd_vel_teleop (bridge) -> twist_mux
+#   -> /cmd_vel_arbitrated -> collision_monitor -> /cmd_vel -> esp_drive.
+#
+# NOT WIRED INTO THE LAUNCH YET — Stage 3 adds the node to robot.launch.py
+# (remap cmd_vel_out -> /cmd_vel_arbitrated) and flips collision_monitor's
+# cmd_vel_in_topic to cmd_vel_arbitrated in nav2_params.yaml. Committed now so
+# the config is versioned with the rest.
+twist_mux:
+  ros__parameters:
+    use_sim_time: false        # true on the laptop sim
+    # LOAD-BEARING: Jazzy twist_mux defaults to TwistStamped; our whole chain
+    # is unstamped Twist. Omitting this = mux subscribes with the wrong type,
+    # receives nothing, errors nowhere.
+    use_stamped: false
+    topics:
+      navigation:
+        topic: /cmd_vel_smoothed
+        timeout: 0.5
+        priority: 10
+      teleop:
+        topic: /cmd_vel_teleop
+        timeout: 0.5
+        priority: 100          # manual overrides autonomous while flowing
+    locks:
+      e_stop:
+        topic: /e_stop
+        timeout: 0.0           # no staleness — lock state = last received value
+        priority: 255

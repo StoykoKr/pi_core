@@ -108,13 +108,21 @@ In and working: deploy fundamentals; provisioning/security subsystem;
 deliberate v1/v2 split); CYD firmware unchanged-by-design; the basic
 connection test (`scripts/connection_test.sh`).
 
-Not yet: **mqtt_bridge** (Stage 2 — the biggest remaining software item);
-twist_mux launch wiring + Pi-variant bringup (Stage 3/6, done against the
-laptop sim first per the plan); firmware v2 (contract custom msgs + time
-sync); Hailo HEF + HailoRT — the model zoo ships a precompiled
-`scdepthv3.hef` for HAILO10H (DFC v5.4.0, NYU, 256×320) → `models/`
-(user-added) + HailoRT matching v5.4.0 in the image; lidar/camera driver
-configs when the hardware exists.
+Also in: **mqtt_bridge** (`src/mqtt_bridge`, compose profile `bridge`) — the
+app ↔ ROS translator per contract §7–9: percent-coordinate goals →
+NavigateToPose, teleop with 400 ms deadman + cancel-on-teleop, e-stop,
+map → retained PNG pipeline, status vocabulary, graceful degradation when
+Nav2/map/slam are absent. Needs the bridge client cert: **existing installs
+re-run `scripts/init-ca.sh` once** (new installs get it automatically).
+Exercise it with `scripts/mqtt_tests.sh` (watch/teleop/goal/estop/maps).
+
+Not yet: slam mapping↔localization mode RESTART (bridge replies
+`not implemented` on load_map/start_mapping — Stage 2's flagged top-risk
+item); twist_mux launch wiring + Pi-variant bringup (Stage 3/6, against the
+laptop sim first); firmware v2 (contract custom msgs + time sync); Hailo HEF
++ HailoRT — the model zoo ships a precompiled `scdepthv3.hef` for HAILO10H
+(DFC v5.4.0, NYU, 256×320) → `models/` (user-added) + HailoRT matching
+v5.4.0 in the image; lidar/camera driver configs when the hardware exists.
 
 ## Security notes
 

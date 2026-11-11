@@ -23,9 +23,28 @@ fix_key_perms() {
     sudo chmod 600 "$CERT_DIR/root_ca.key"
 }
 
+# The mqtt_bridge is itself an mTLS client of the broker, so it needs its own
+# CA-signed client cert. Minted in the ALWAYS-RUN path so existing installs
+# pick it up by re-running this script (no CA regeneration).
+mint_bridge_cert() {
+    if [ -f "$CERT_DIR/bridge_client.crt" ]; then return 0; fi
+    echo "[+] Minting mqtt_bridge client certificate..."
+    cd "$CERT_DIR"
+    openssl genrsa -out bridge_client.key 2048
+    openssl req -new -key bridge_client.key -out bridge.csr \
+      -subj "/CN=robot_bridge/O=Re4Life/C=BG"
+    printf "extendedKeyUsage=clientAuth\nbasicConstraints=CA:FALSE\n" > bridge_ext.cnf
+    openssl x509 -req -in bridge.csr -CA root_ca.crt -CAkey root_ca.key \
+      -CAcreateserial -out bridge_client.crt -days 1825 -sha256 \
+      -extfile bridge_ext.cnf
+    rm -f bridge.csr bridge_ext.cnf root_ca.srl
+    chmod 600 bridge_client.key   # bridge container runs as root -> reads fine
+}
+
 if [ -f "$CERT_DIR/root_ca.crt" ]; then
     echo "[=] CA already exists in $CERT_DIR — keeping it (delete manually to regenerate)."
     fix_key_perms
+    mint_bridge_cert
     exit 0
 fi
 
@@ -73,6 +92,7 @@ cat root_ca.crt >> mqtt_cert.crt
 # NOTE: chmod BEFORE chown (after the chown, the plain user may no longer
 # touch the file) — and both via the helper so re-runs stay correct.
 fix_key_perms
+mint_bridge_cert
 
 echo "[+] Done. Certs in $CERT_DIR (SAN includes $AP_IP)."
 echo "    NEVER commit this directory — it is gitignored, keep it that way."

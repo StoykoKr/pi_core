@@ -329,11 +329,21 @@ void loop() {
                      ? AGENT_AVAILABLE : WAITING_AGENT;);
       break;
     case AGENT_AVAILABLE:
-      agentState = createEntities() ? AGENT_CONNECTED : WAITING_AGENT;
-      if (agentState == WAITING_AGENT) destroyEntities();
+      // Mid-way create failure -> partially-initialized entities; fini on
+      // those is undefined territory. Zero the motors and reboot clean
+      // (rare event; reconnects in ~2 s; VESCs sit idle meanwhile).
+      if (!createEntities()) {
+        stopMotorsHard();
+        ESP.restart();
+      }
+      agentState = AGENT_CONNECTED;
       break;
     case AGENT_CONNECTED:
-      EXECUTE_EVERY_N_MS(2000,
+      // Ping every 5 s (was 2 s): failing pings block up to 300 ms and
+      // over-eager pinging of a busy serial link can flap the connection.
+      // Safety unaffected: the 500 ms /cmd_vel watchdog is the stop
+      // mechanism, not the ping.
+      EXECUTE_EVERY_N_MS(5000,
         agentState = (RMW_RET_OK == rmw_uros_ping_agent(100, 3))
                      ? AGENT_CONNECTED : AGENT_DISCONNECTED;);
       if (agentState == AGENT_CONNECTED) {

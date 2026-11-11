@@ -141,6 +141,39 @@ services:
     command: bash -c "source /opt/ros/jazzy/setup.bash && python3 /provisioning/provisioning_node.py"
 
   # ==========================================================================
+  # mqtt_bridge — mobile app <-> ROS2 (contract sections 7-9). Reuses the
+  # ros2_app image; builds its two packages on start (~30 s) into its own
+  # container filesystem, then runs the node. Needs the bridge client cert —
+  # minted by scripts/init-ca.sh (EXISTING installs: re-run that script once).
+  # ==========================================================================
+  bridge:
+    image: re4life/ros2_app:latest
+    container_name: mqtt_bridge
+    profiles: ["bridge"]
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - ros2_app
+      - mosquitto
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///robot_ws/src/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
+    volumes:
+      - ../src:/robot_ws/src:ro
+      - /robot_data:/robot_data
+    # NO --symlink-install here: ament_python's develop mode writes .egg-info
+    # INTO the source dir, which is mounted read-only -> EROFS crash loop.
+    # A plain build keeps all artifacts in the container filesystem.
+    command: >
+      bash -c "source /opt/ros/jazzy/setup.bash &&
+               cd /robot_ws &&
+               colcon build --packages-select robot_interfaces mqtt_bridge &&
+               source install/setup.bash &&
+               ros2 run mqtt_bridge mqtt_bridge --ros-args
+                 --params-file /robot_ws/src/mqtt_bridge/config/bridge_params.yaml"
+
+  # ==========================================================================
   # web_video_server — HTTP :8080; serves ROS image topics to the CYD screen
   # and the mobile app (video never goes over MQTT). Only useful with a
   # camera publishing, hence the profile.

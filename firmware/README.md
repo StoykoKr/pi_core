@@ -3,8 +3,26 @@
 | Dir | Board | Status |
 |---|---|---|
 | `esp_drive/` | ESP32 DevKitC | **micro-ROS port v1** — flash this. VESC drive via /cmd_vel (IK onboard), JointState telemetry, **watchdog 500 ms**, /e_stop active brake |
-| `esp_sensors/` | ESP32 DevKitC | **micro-ROS port v1** — flash this. Ultrasonic Range topics, CYD UART passthrough (`/ui/qr_payload` ↔ `QR:`/`<REQ_QR>`) |
-| `screen/` | CYD (ESP32-2432S028R) | current (non-ROS by design). `User_Setup_CYD.h` = the hard-won TFT_eSPI config (inversion OFF, BGR) — without it: negative colors, swapped red/blue |
+| `esp_sensors/` | ESP32 DevKitC | **micro-ROS port v1.1** — flash this. Ultrasonic Range topics, CYD UART passthrough (`/ui/qr_payload` ↔ `QR:`/`<REQ_QR>`). v1.1 field-hardening: touches are queued (not a single flag), survive agent disconnects, publish is retried until ACKed, ping softened to 5 s, and a diagnostic `/esp_sensors/touch_count` topic exposes the UART side. |
+
+## Debugging lost CYD touches (field issue 2026-11)
+
+Symptom: touches reach the ESP standalone but `/ui/request_qr` rarely arrives
+on the Pi with micro-ROS active. v1.1 both hardens the path and makes it
+observable. Discrimination procedure (5 min):
+
+1. `docker logs -f micro_ros_agent_sensors` while touching — lines about
+   sessions being created/deleted = **connection flapping** (the prime
+   suspect: the old 2 s ping over a busy serial link). v1.1's 5 s ping +
+   queued touches should already mask it; persistent flapping → lower the
+   range publish rate or raise ping timeout.
+2. `ros2 topic echo /esp_sensors/touch_count` (in the app container) while
+   touching. Counter increments but `/ui/request_qr` silent → publish path /
+   session problem (the retry loop should now deliver late rather than
+   never). Counter does NOT increment → the UART read itself is starved on
+   that board — report back, that would be new information.
+3. ESP LED: solid = connected; blinking during the test = flapping confirmed.
+| `screen/` | CYD (ESP32-2432S028R) | current (non-ROS by design). `User_Setup_CYD.h` = the hard-won TFT_eSPI config (inversion OFF, BGR) — without it: negative colors, swapped red/blue. **Field fix 2026-11:** QR version is now scanned dynamically 12→20 at ECC_MEDIUM (the old hardcoded v12/ECC_LOW could not hold the ~500 B pairing payload; current payloads land at ~v17). |
 | `legacy/` | — | the old ASCII-protocol firmwares + ESP32-CAM experiment, reference only |
 
 ## v1 scope (deliberate)

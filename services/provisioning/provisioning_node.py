@@ -29,8 +29,10 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Empty, String
 
-# esp_sensors allocates a fixed 600 B buffer for this message (contract §2);
-# screen firmware caps at QR version 12. Refuse to send anything bigger.
+# esp_sensors allocates a fixed buffer for this message (contract §2: 600 B
+# payload cap, 601 B buffer for the CDR null terminator); the screen renders
+# QR versions up to 20 at ECC_MEDIUM (~660 B capacity), so the 600 B cap is
+# the binding limit end to end. Refuse to send anything bigger.
 MAX_PAYLOAD_BYTES = 600
 
 GENERATOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qr_generator.py")

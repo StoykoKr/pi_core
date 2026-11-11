@@ -1,0 +1,29 @@
+# mqtt_bridge parameters — defaults match the Pi deployment.
+# wheel_track / wheel_diameter MUST stay equal to the firmware defines and
+# base_controller params (one tape measure, three places, same value).
+mqtt_bridge:
+  ros__parameters:
+    broker_host: "127.0.0.1"
+    broker_port: 8883
+    use_tls: true
+    ca_path:   "/robot_data/certs/root_ca.crt"
+    cert_path: "/robot_data/certs/bridge_client.crt"
+    key_path:  "/robot_data/certs/bridge_client.key"
+
+    wheel_track: 0.50        # TODO MEASURE (placeholder, see contract)
+    wheel_diameter: 0.165
+    # Legacy MobileManager negated the right wheel before sending. If the app
+    # still sends legacy-convention values, set this to -1.0. With the app
+    # sending forward-positive for both wheels, keep +1.0 (firmware handles
+    # the physical motor mirroring).
+    right_rpm_sign: 1.0
+
+    # Teleop safety: caps (teleop bypasses the velocity_smoother) + deadman.
+    max_lin: 0.40            # m/s
+    max_ang: 0.80            # rad/s
+    deadman_s: 0.40
+    wasd_lin: 0.25
+    wasd_ang: 0.60
+
+    map_min_interval_s: 2.0
+    maps_dir: "/robot_data/maps"

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mqtt_bridge</name>
+  <version>1.0.0</version>
+  <description>Mobile app (MQTT/mTLS) to ROS2 bridge per interface contract v4 sections 7-9.
+    Percent-coordinate map pipeline, NavigateToPose client, teleop with deadman,
+    cancel-on-teleop, e-stop, status vocabulary.</description>
+  <maintainer email="petko_ivanov_stoev@abv.bg">Petko Stoev</maintainer>
+  <license>Apache-2.0</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>robot_interfaces</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

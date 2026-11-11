@@ -32,7 +32,23 @@ SPIClass mySpi(VSPI);
 XPT2046_Touchscreen ts(XPT_CS, XPT_IRQ);
 TFT_eSPI tft = TFT_eSPI();
 struct QRCode qrcode;
-#define QR_VERSION 12 
+
+// QR sizing (field-tested 2026-11): the pairing payload (~500+ B) does NOT
+// fit the old hardcoded version 12, and the Pi renders its PNG at ECC medium
+// — the screen now matches.
+//
+// IMPORTANT: the vendored qrcode.c NEVER reports "text too long" (its own
+// source carries a TODO for exactly that) — an oversized payload silently
+// overflows a stack buffer inside qrcode_initText. So the version is chosen
+// UP FRONT from the standard byte-mode capacity table (ECC M), and initText
+// is only ever called with a version the payload is known to fit.
+// Current payloads (~500 B) land at v17. Buffer is allocated for
+// QR_MAX_VERSION (~1.2 KB at v20 — nothing on an ESP32).
+#define QR_MIN_VERSION 12
+#define QR_MAX_VERSION 20
+#define QR_ECC         ECC_MEDIUM
+// Byte-mode capacity at ECC MEDIUM for versions 12..20 (standard QR table):
+static const uint16_t QR_M_CAPACITY[] = {287, 331, 362, 412, 450, 504, 560, 624, 666};
 
 // State Management
 enum State { MENU, SHOW_QR, SHOW_STREAM };
@@ -254,11 +270,34 @@ void processIncoming(String cmd) {
 void drawLargeQR(String payload) {
     tft.fillScreen(TFT_WHITE);
     
-    // Generate QR
-    uint8_t* qrcodeData = (uint8_t*)malloc(qrcode_getBufferSize(QR_VERSION));
+    // Pick the smallest version whose ECC-M byte capacity fits the payload —
+    // BEFORE touching qrcode_initText (see the capacity-table note above).
+    uint8_t version = 0;
+    for (uint8_t v = QR_MIN_VERSION; v <= QR_MAX_VERSION; v++) {
+        if (payload.length() <= QR_M_CAPACITY[v - QR_MIN_VERSION]) { version = v; break; }
+    }
+    if (version == 0) {
+        tft.setTextColor(TFT_BLACK, TFT_WHITE);
+        tft.setCursor(10, 100);
+        tft.println("QR payload too large!");
+        tft.setCursor(10, 220);
+        tft.println("Tap to Exit");
+        return;
+    }
+
+    uint8_t* qrcodeData = (uint8_t*)malloc(qrcode_getBufferSize(QR_MAX_VERSION));
     if (qrcodeData) {
-        qrcode_initText(&qrcode, qrcodeData, QR_VERSION, 0, payload.c_str());
-        
+        int8_t rc = qrcode_initText(&qrcode, qrcodeData, version, QR_ECC, payload.c_str());
+        if (rc != 0) {   // lib only errors on unsupported characters
+            free(qrcodeData);
+            tft.setTextColor(TFT_BLACK, TFT_WHITE);
+            tft.setCursor(10, 100);
+            tft.println("QR encode error!");
+            tft.setCursor(10, 220);
+            tft.println("Tap to Exit");
+            return;
+        }
+
         // Auto-scale logic
         int scale = 2;
         if (qrcode.size * 3 < 240) scale = 3;

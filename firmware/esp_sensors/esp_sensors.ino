@@ -31,6 +31,7 @@
 #include <sensor_msgs/msg/range.h>
 #include <std_msgs/msg/string.h>
 #include <std_msgs/msg/empty.h>
+#include <std_msgs/msg/int32.h>
 
 #include <Arduino.h>
 
@@ -133,10 +134,20 @@ void serviceUltrasonics() {
 }
 
 // ── CYD UART line reader ─────────────────────────────────────────────────────
+// FIELD-TEST HARDENING (2026-11): touches were lost when micro-ROS was
+// active. Touches are therefore (a) COUNTED (touchCount, exposed on a
+// diagnostic topic so the Pi can see whether UART reads work at all),
+// (b) QUEUED (pendingTouches) instead of a single flag, (c) NEVER discarded
+// on agent disconnect — a touch made while the link flaps is delivered when
+// it comes back (the user is standing at the screen waiting), and
+// (d) published WITH RETRY: rcl_publish's return is checked and the touch
+// stays queued until an RCL_RET_OK.
 static const int CYD_BUF_SZ = 64;
 char cydBuf[CYD_BUF_SZ];
 int cydIdx = 0;
-volatile bool qrRequested = false;
+uint8_t pendingTouches = 0;        // capped at 3 — the user mashing the
+                                   // button should not queue a QR storm
+int32_t touchCount = 0;            // lifetime counter, diagnostic topic
 
 void serviceCydUart() {
   while (Serial2.available()) {
@@ -144,7 +155,10 @@ void serviceCydUart() {
     if (c == '\n' || c == '\r') {
       if (cydIdx > 0) {
         cydBuf[cydIdx] = 0;
-        if (strstr(cydBuf, "REQ_QR") != NULL) qrRequested = true;
+        if (strstr(cydBuf, "REQ_QR") != NULL) {
+          touchCount++;
+          if (pendingTouches < 3) pendingTouches++;
+        }
         cydIdx = 0;
       }
     } else if (cydIdx < CYD_BUF_SZ - 1) {
@@ -162,9 +176,11 @@ rcl_node_t node;
 rclc_executor_t executor;
 rcl_publisher_t pub_range[4];
 rcl_publisher_t pub_req_qr;
+rcl_publisher_t pub_touch_count;
 rcl_subscription_t sub_qr;
 sensor_msgs__msg__Range msg_range[4];
 std_msgs__msg__Empty msg_req_qr;
+std_msgs__msg__Int32 msg_touch_count;
 std_msgs__msg__String msg_qr;
 static char qrPayloadBuf[QR_BUF_SZ];
 
@@ -202,6 +218,11 @@ bool createEntities() {
   }
   RCCHECK(rclc_publisher_init_default(&pub_req_qr, &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Empty), "/ui/request_qr"));
+  // Diagnostic: lifetime touch counter. If this increments on the Pi while
+  // /ui/request_qr stays silent, the UART read works and the publish path is
+  // the problem; if it doesn't increment, the UART read is starved.
+  RCCHECK(rclc_publisher_init_default(&pub_touch_count, &node,
+      ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32), "/esp_sensors/touch_count"));
   RCCHECK(rclc_subscription_init_default(&sub_qr, &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String), "/ui/qr_payload"));
 
@@ -216,6 +237,7 @@ void destroyEntities() {
   (void)rmw_uros_set_context_entity_destroy_session_timeout(rmw_ctx, 0);
   for (int i = 0; i < 4; i++) rcl_publisher_fini(&pub_range[i], &node);
   rcl_publisher_fini(&pub_req_qr, &node);
+  rcl_publisher_fini(&pub_touch_count, &node);
   rcl_subscription_fini(&sub_qr, &node);
   rclc_executor_fini(&executor);
   rcl_node_fini(&node);
@@ -274,11 +296,18 @@ void loop() {
                      ? AGENT_AVAILABLE : WAITING_AGENT;);
       break;
     case AGENT_AVAILABLE:
-      agentState = createEntities() ? AGENT_CONNECTED : WAITING_AGENT;
-      if (agentState == WAITING_AGENT) destroyEntities();
+      // A mid-way create failure would leave partially-initialized entities;
+      // fini on those is undefined territory. A clean reboot is the
+      // predictable recovery (rare event; reconnects in ~2 s).
+      if (!createEntities()) ESP.restart();
+      agentState = AGENT_CONNECTED;
       break;
     case AGENT_CONNECTED:
-      EXECUTE_EVERY_N_MS(2000,
+      // Ping every 5 s (was 2 s): each failing ping blocks up to 300 ms, and
+      // over-eager pinging of a busy serial link is a suspected source of
+      // connection flapping (-> lost touches). The agent death case is still
+      // caught within ~5 s, and publishes fail fast on a truly dead link.
+      EXECUTE_EVERY_N_MS(5000,
         agentState = (RMW_RET_OK == rmw_uros_ping_agent(100, 3))
                      ? AGENT_CONNECTED : AGENT_DISCONNECTED;);
       if (agentState == AGENT_CONNECTED) {
@@ -304,14 +333,21 @@ void loop() {
     if (now - lastRangePubMs >= 250) {    // ~4 Hz, legacy cadence
       lastRangePubMs = now;
       publishRanges();
+      msg_touch_count.data = touchCount;  // diagnostic heartbeat, 4 Hz
+      rcl_publish(&pub_touch_count, &msg_touch_count, NULL);
     }
-    if (qrRequested) {
-      qrRequested = false;
-      rcl_publish(&pub_req_qr, &msg_req_qr, NULL);
+    // Deliver queued touches, ONE per loop, de-queue only on RCL_RET_OK.
+    // Honest note: OK means "buffered into the XRCE stream", not "delivered" —
+    // a link death inside the ping window can still eat a buffered touch.
+    // The /esp_sensors/touch_count diagnostic exposes that residual case.
+    // Touches made while disconnected are delivered after reconnect.
+    if (pendingTouches > 0) {
+      if (rcl_publish(&pub_req_qr, &msg_req_qr, NULL) == RCL_RET_OK) {
+        pendingTouches--;
+      }
     }
-  } else {
-    qrRequested = false;                  // don't queue stale touches
   }
+  // NOTE: pendingTouches deliberately NOT cleared when disconnected.
 
   delay(1);
 }
